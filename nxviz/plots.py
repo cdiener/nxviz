@@ -1,6 +1,8 @@
 
 import logging
 
+from six import string_types
+
 import matplotlib.patches as patches
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -72,7 +74,8 @@ class BasePlot(object):
     """  # noqa
     def __init__(self, graph, node_order=None, node_size=None,
                  node_grouping=None, node_color=None, node_labels=None,
-                 edge_width=None, edge_color=None, data_types=None,
+                 edge_width=None, edge_color=None, edge_cmap=None,
+                 edge_limits=None, data_types=None,
                  nodeprops=None, edgeprops=None, node_label_color=False,
                  group_label_position=None, group_label_color=False, **kwargs):
         super(BasePlot, self).__init__()
@@ -102,6 +105,9 @@ class BasePlot(object):
         # Set edge properties
         self.edge_width = edge_width
         self.edge_color = edge_color
+        self.edge_cmap = edge_cmap
+        self.edge_limits = edge_limits
+
         if self.edge_color:
             self.edge_colors = []
             self.compute_edge_colors()
@@ -155,6 +161,8 @@ class BasePlot(object):
                 self.compute_group_colors()
             else:
                 self.group_label_color = ['black'] * len(self.nodes)
+        else:
+            self.groups = None
 
     def check_data_types(self, data_types):
         """
@@ -182,10 +190,22 @@ class BasePlot(object):
         if self.groups:
             self.draw_group_labels()
         logging.debug('DRAW: {0}'.format(self.sm))
-        if self.sm:
-            self.figure.subplots_adjust(right=0.8)
-            cax = self.figure.add_axes([0.85, 0.2, 0.05, 0.6])
-            self.figure.colorbar(self.sm, cax=cax)
+        if hasattr(self, "node_sm") and hasattr(self, "edge_sm"):
+            right = 0.7
+            cm_x = 0.75
+        else:
+            right = 0.8
+            cm_x = 0.85
+        if hasattr(self, "node_sm"):
+            self.figure.subplots_adjust(right=right)
+            cax = self.figure.add_axes([cm_x, 0.2, 0.05, 0.6])
+            self.figure.colorbar(self.node_sm, cax=cax)
+            if self.edge_sm:
+                cm_x += 0.1
+        if hasattr(self, "edge_sm"):
+            self.figure.subplots_adjust(right=right)
+            cax = self.figure.add_axes([cm_x, 0.2, 0.05, 0.6])
+            self.figure.colorbar(self.edge_sm, cax=cax)
         self.ax.relim()
         self.ax.autoscale_view()
         self.ax.set_aspect('equal')
@@ -216,12 +236,13 @@ class BasePlot(object):
         logging.debug('length of data_reduced: {0}'.format(len(data_reduced)))
         logging.debug('dtype: {0}'.format(dtype))
         if len(data_reduced) > 1 and dtype == 'continuous':
-            self.sm = plt.cm.ScalarMappable(cmap=cmap,
-                                            norm=plt.Normalize(vmin=min(data_reduced),  # noqa
-                                                               vmax=max(data_reduced)   # noqa
-                                                               )
-                                            )
-            self.sm._A = []
+            self.node_sm = plt.cm.ScalarMappable(
+                cmap=cmap,
+                norm=plt.Normalize(vmin=min(data_reduced),
+                                   vmax=max(data_reduced)
+                                   )
+            )
+            self.node_sm._A = []
 
     def compute_group_colors(self):
         """Computes the group colors according to node colors"""
@@ -235,28 +256,37 @@ class BasePlot(object):
         data_reduced = sorted(list(set(data)))
         dtype = infer_data_type(data)
         n_grps = num_discrete_groups(data)
-        if dtype == 'categorical' or dtype == 'ordinal':
-            if n_grps <= 8:
-                cmap = \
-                    get_cmap(cmaps['Accent_{0}'.format(n_grps)].mpl_colormap)
-            else:
-                cmap = n_group_colorpallet(n_grps)
-        elif dtype == 'continuous' and not is_data_diverging(data):
-            cmap = get_cmap(cmaps['weights'])
-
+        if self.edge_cmap is None:
+            if dtype == 'categorical' or dtype == 'ordinal':
+                if n_grps <= 8:
+                    cmap = get_cmap(
+                        cmaps['Accent_{0}'.format(n_grps)].mpl_colormap)
+                else:
+                    cmap = n_group_colorpallet(n_grps)
+            elif dtype == 'continuous' and not is_data_diverging(data):
+                cmap = get_cmap(cmaps['weights'])
+            elif dtype == 'continuous' and is_data_diverging(data):
+                cmap = get_cmap(cmaps['diverging'].mpl_colormap)
+        elif isinstance(self.edge_cmap, string_types):
+            cmap = get_cmap(self.edge_cmap)
+        else:
+            cmap = self.edge_cmap
         for d in data:
             idx = data_reduced.index(d) / n_grps
             self.edge_colors.append(cmap(idx))
+        if self.edge_limits is None:
+            vmin, vmax = min(data_reduced), max(data_reduced)
+        else:
+            vmin, vmax = self.edge_limits
         # Add colorbar if required.
         logging.debug('length of data_reduced: {0}'.format(len(data_reduced)))
         logging.debug('dtype: {0}'.format(dtype))
         if len(data_reduced) > 1 and dtype == 'continuous':
-            self.sm = plt.cm.ScalarMappable(cmap=cmap,
-                                            norm=plt.Normalize(vmin=min(data_reduced),  # noqa
-                                                               vmax=max(data_reduced)   # noqa
-                                                               )
-                                            )
-            self.sm._A = []
+            self.edge_sm = plt.cm.ScalarMappable(
+                cmap=cmap,
+                norm=plt.Normalize(vmin=vmin, vmax=vmax)
+                )
+            self.edge_sm._A = []
 
     def compute_group_label_positions(self):
         """Computes the position of each group label according to the wanted
@@ -457,7 +487,7 @@ class CircosPlot(BasePlot):
 
             # Computes the text rotation
             theta_deg = to_degrees(theta)
-            if theta_deg >= -90 and theta_deg < 90:   # right side
+            if x >= 0:   # right side
                 rot = theta_deg
             else:  # left side
                 rot = theta_deg - 180
