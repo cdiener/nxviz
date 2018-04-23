@@ -359,7 +359,7 @@ class CircosPlot(BasePlot):
                 va = "center"
             # Computes the text rotation
             theta_deg = to_degrees(theta)
-            if theta_deg >= -90 and theta_deg < 90:   # right side
+            if x >= 0:   # right side
                 rot = theta_deg
             else:  # left side
                 rot = theta_deg - 180
